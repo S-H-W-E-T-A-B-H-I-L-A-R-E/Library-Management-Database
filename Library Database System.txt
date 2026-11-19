@@ -1,0 +1,267 @@
+/*Create database*/
+CREATE DATABASE library_management;
+
+USE library_management;
+
+/*Authors table*/
+CREATE TABLE authors (
+    author_id INT PRIMARY KEY AUTO_INCREMENT,
+    author_name VARCHAR(100) NOT NULL,
+    country VARCHAR(50)
+);
+
+/*Categories table*/
+CREATE TABLE categories (
+    category_id INT PRIMARY KEY AUTO_INCREMENT,
+    category_name VARCHAR(100) NOT NULL UNIQUE
+);
+
+/*Books table*/
+CREATE TABLE books (
+    book_id INT PRIMARY KEY AUTO_INCREMENT,
+    title VARCHAR(200) NOT NULL,
+    isbn VARCHAR(20) UNIQUE,
+    author_id INT,
+    category_id INT,
+    publication_year INT,
+
+    FOREIGN KEY (author_id)
+        REFERENCES authors(author_id),
+
+    FOREIGN KEY (category_id)
+        REFERENCES categories(category_id)
+);
+
+/*Book copies table*/
+
+CREATE TABLE book_copies (
+    copy_id INT PRIMARY KEY AUTO_INCREMENT,
+    book_id INT NOT NULL,
+    status ENUM('AVAILABLE', 'ISSUED', 'DAMAGED')
+        DEFAULT 'AVAILABLE',
+
+    FOREIGN KEY (book_id)
+        REFERENCES books(book_id)
+);
+
+/*Members table*/
+CREATE TABLE members (
+    member_id INT PRIMARY KEY AUTO_INCREMENT,
+    member_name VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    phone VARCHAR(15),
+    membership_date DATE DEFAULT (CURRENT_DATE),
+    status ENUM('ACTIVE', 'INACTIVE')
+        DEFAULT 'ACTIVE'
+);
+
+/*Loans table*/
+
+CREATE TABLE loans (
+    loan_id INT PRIMARY KEY AUTO_INCREMENT,
+    copy_id INT NOT NULL,
+    member_id INT NOT NULL,
+
+    issue_date DATE NOT NULL,
+    due_date DATE NOT NULL,
+    return_date DATE,
+
+    fine_amount DECIMAL(10,2) DEFAULT 0,
+
+    FOREIGN KEY (copy_id)
+        REFERENCES book_copies(copy_id),
+
+    FOREIGN KEY (member_id)
+        REFERENCES members(member_id),
+
+    CHECK (due_date >= issue_date),
+    CHECK (fine_amount >= 0)
+);
+
+/*Insert sample data*/
+INSERT INTO authors (author_name, country)
+VALUES
+('James Gosling', 'Canada'),
+('Robert Martin', 'USA'),
+('Joshua Bloch', 'USA');
+
+INSERT INTO categories (category_name)
+VALUES
+('Programming'),
+('Database'),
+('Software Engineering');
+
+INSERT INTO books
+(title, isbn, author_id, category_id, publication_year)
+VALUES
+('Java Programming', 'ISBN101', 1, 1, 2023),
+('Clean Code', 'ISBN102', 2, 3, 2022),
+('Effective Java', 'ISBN103', 3, 1, 2018);
+
+INSERT INTO book_copies (book_id)
+VALUES
+(1), (1), (1),
+(2), (2),
+(3), (3);
+
+INSERT INTO members (member_name, email, phone)
+VALUES
+('Rahul', 'rahul@gmail.com', '9876543210'),
+('Priya', 'priya@gmail.com', '9876543211'),
+('Amit', 'amit@gmail.com', '9876543212');
+
+/*Display all books*/
+SELECT
+    b.book_id,
+    b.title,
+    a.author_name,
+    c.category_name,
+    b.publication_year
+FROM books b
+JOIN authors a
+    ON b.author_id = a.author_id
+JOIN categories c
+    ON b.category_id = c.category_id;
+	
+/*Find available books*/	
+SELECT
+    b.title,
+    COUNT(bc.copy_id) AS available_copies
+FROM books b
+JOIN book_copies bc
+    ON b.book_id = bc.book_id
+WHERE bc.status = 'AVAILABLE'
+GROUP BY b.book_id, b.title;
+
+/*Issue a book*/
+
+START TRANSACTION;
+
+SELECT copy_id
+FROM book_copies
+WHERE book_id = 1
+AND status = 'AVAILABLE'
+LIMIT 1
+FOR UPDATE;
+
+-- Suppose the available copy_id is 1
+
+INSERT INTO loans (
+    copy_id,
+    member_id,
+    issue_date,
+    due_date
+)
+VALUES (
+    1,
+    1,
+    CURDATE(),
+    DATE_ADD(CURDATE(), INTERVAL 14 DAY)
+);
+
+UPDATE book_copies
+SET status = 'ISSUED'
+WHERE copy_id = 1;
+
+COMMIT;
+
+
+/*Return a book*/
+START TRANSACTION;
+
+UPDATE loans
+SET
+    return_date = CURDATE(),
+    fine_amount = GREATEST(
+        DATEDIFF(CURDATE(), due_date), 0
+    ) * 5
+WHERE loan_id = 1
+AND return_date IS NULL;
+
+UPDATE book_copies
+SET status = 'AVAILABLE'
+WHERE copy_id = (
+    SELECT copy_id
+    FROM loans
+    WHERE loan_id = 1
+    AND return_date = CURDATE()
+);
+
+COMMIT;
+
+/*Find currently issued books*/
+SELECT
+    m.member_name,
+    b.title,
+    l.issue_date,
+    l.due_date
+FROM loans l
+JOIN members m
+    ON l.member_id = m.member_id
+JOIN book_copies bc
+    ON l.copy_id = bc.copy_id
+JOIN books b
+    ON bc.book_id = b.book_id
+WHERE l.return_date IS NULL;
+
+/*Find overdue books*/
+SELECT
+    m.member_name,
+    b.title,
+    l.due_date,
+    DATEDIFF(CURDATE(), l.due_date)
+        AS overdue_days
+FROM loans l
+JOIN members m
+    ON l.member_id = m.member_id
+JOIN book_copies bc
+    ON l.copy_id = bc.copy_id
+JOIN books b
+    ON bc.book_id = b.book_id
+WHERE l.return_date IS NULL
+AND l.due_date < CURDATE();
+
+/*Calculate total fines per member*/
+
+SELECT
+    m.member_name,
+    SUM(l.fine_amount) AS total_fine
+FROM members m
+JOIN loans l
+    ON m.member_id = l.member_id
+GROUP BY m.member_id, m.member_name;
+
+/*Find the most borrowed books*/
+SELECT
+    b.title,
+    COUNT(l.loan_id) AS total_issued
+FROM books b
+JOIN book_copies bc
+    ON b.book_id = bc.book_id
+JOIN loans l
+    ON bc.copy_id = l.copy_id
+GROUP BY b.book_id, b.title
+ORDER BY total_issued DESC
+LIMIT 5;
+
+/*Count books in each category*/
+
+SELECT
+    c.category_name,
+    COUNT(b.book_id) AS total_books
+FROM categories c
+LEFT JOIN books b
+    ON c.category_id = b.category_id
+GROUP BY c.category_id, c.category_name;
+
+
+/*Find members who borrowed more than 2 books*/
+
+SELECT
+    m.member_name,
+    COUNT(l.loan_id) AS total_borrowed
+FROM members m
+JOIN loans l
+    ON m.member_id = l.member_id
+GROUP BY m.member_id, m.member_name
+HAVING COUNT(l.loan_id) > 2;
